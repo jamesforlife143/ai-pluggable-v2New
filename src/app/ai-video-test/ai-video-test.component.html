@@ -1,0 +1,43 @@
+<div class="container">
+
+  <h2>AI Video Agent Test</h2>
+
+  <!-- 🎮 Controls -->
+  <div class="controls">
+
+    <button (click)="play(sample1)">▶ Play Sample 1</button>
+    <button (click)="play(sample2)">▶ Play Sample 2</button>
+    <button (click)="play(sample3)">▶ Play Sample 3</button>
+
+    <button (click)="pause()">⏸ Pause</button>
+    <button (click)="resume()">▶ Resume</button>
+    <button (click)="stop()">⏹ Stop</button>
+
+    <button (click)="clearLogs()">🧹 Clear Transcript</button>
+
+  </div>
+
+  <!-- 🎥 VIDEO COMPONENT -->
+  <div style="width:400px;height:300px;border:1px solid #ccc;">
+    <ai-video-agent
+      [text]="response()"
+      [pause]="isPaused()"
+      [stop]="isStopped()"
+      (transcript)="onText($event)">
+    </ai-video-agent>
+  </div>
+
+  <!-- 📜 Transcript -->
+  <!-- <div class="transcript">
+    <h3>Transcript Output</h3>
+
+    <div *ngFor="let t of transcriptLog()">
+      {{ t }}
+    </div>
+  </div> -->
+
+  <div class="transcript">
+  {{ transcriptText }}
+</div>
+
+</div>
