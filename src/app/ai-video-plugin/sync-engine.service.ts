@@ -76,7 +76,7 @@ export class SyncEngine {
       return;
     }
 
-    let playbackStartedAt = 0;
+    let completedPlaybackMs = 0;
 
     // pre-generate first audio
     let nextAudioBuffer =
@@ -95,10 +95,8 @@ export class SyncEngine {
       // stop playback
       if (
         this.isStopped() ||
-        this.isPlaybackExpired(
-          playbackStartedAt,
+        completedPlaybackMs >=
           maxPlaybackMs
-        )
       ) {
 
         this.audio.pause();
@@ -272,22 +270,18 @@ export class SyncEngine {
 
       await this.sleep(40);
 
-      // play audio
-      if (!playbackStartedAt) {
-
-        playbackStartedAt =
-          Date.now();
-      }
-
       await this.audio.play();
 
       // wait completion
       const completed =
         await this.waitForAudioEnd(
           audioUrl,
-          playbackStartedAt,
+          completedPlaybackMs,
           maxPlaybackMs
         );
+
+      completedPlaybackMs +=
+        this.audio.currentTime * 1000;
 
       if (!completed) {
 
@@ -336,69 +330,59 @@ export class SyncEngine {
 
   private waitForAudioEnd(
     audioUrl: string,
-    playbackStartedAt: number,
+    completedPlaybackMs: number,
     maxPlaybackMs: number
   ) {
 
     return new Promise<boolean>(
       (resolve) => {
 
-      const elapsed =
-        Date.now() - playbackStartedAt;
+      let settled = false;
 
-      const remaining =
-        Math.max(
-          0,
-          maxPlaybackMs - elapsed
+      const settle =
+        (completed: boolean) => {
+
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+
+        window.clearInterval(
+          timer
         );
-
-      const timeout =
-        window.setTimeout(() => {
 
           URL.revokeObjectURL(
             audioUrl
           );
 
-          resolve(false);
+        resolve(completed);
+      };
 
-        }, remaining);
+      const timer =
+        window.setInterval(() => {
+
+        if (
+          completedPlaybackMs +
+            this.audio.currentTime * 1000 >=
+          maxPlaybackMs
+        ) {
+
+          settle(false);
+        }
+
+      }, 250);
 
       this.audio.onended = () => {
 
-        window.clearTimeout(
-          timeout
-        );
-
-        URL.revokeObjectURL(
-          audioUrl
-        );
-
-        resolve(true);
+        settle(true);
       };
 
       this.audio.onerror = () => {
 
-        window.clearTimeout(
-          timeout
-        );
-
-        URL.revokeObjectURL(
-          audioUrl
-        );
-
-        resolve(false);
+        settle(false);
       };
     });
-  }
-
-  private isPlaybackExpired(
-    playbackStartedAt: number,
-    maxPlaybackMs: number
-  ) {
-
-    return !!playbackStartedAt &&
-      Date.now() - playbackStartedAt >=
-        maxPlaybackMs;
   }
 
   private sleep(

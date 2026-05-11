@@ -173,8 +173,6 @@ sentence count exactly.
 
       const raw = data?.choices?.[0]?.message?.content?.trim() ?? '';
 
-      console.log('Emotion RAW:', raw);
-
       const match = raw.match(/\[[\s\S]*\]/);
       if (!match) {
         return this.fallback(sentences);

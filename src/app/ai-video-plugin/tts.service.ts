@@ -1,7 +1,19 @@
 import { Injectable } from '@angular/core';
 
-import * as SpeechSDK
+import type * as SpeechSDKTypes
 from 'microsoft-cognitiveservices-speech-sdk';
+
+declare global {
+  interface Window {
+    SpeechSDK: typeof SpeechSDKTypes;
+  }
+}
+
+const getSpeechSdk = () =>
+  window.SpeechSDK;
+
+const speechSdkAssetPath =
+  'assets/speech-sdk/microsoft.cognitiveservices.speech.sdk.bundle.js';
 
 @Injectable({
   providedIn: 'root'
@@ -9,48 +21,25 @@ from 'microsoft-cognitiveservices-speech-sdk';
 export class TtsService {
 
   private speechConfig:
-    SpeechSDK.SpeechConfig;
+    SpeechSDKTypes.SpeechConfig | null = null;
 
-  constructor() {
-
-    // Azure config
-    this.speechConfig =
-      SpeechSDK.SpeechConfig
-        .fromSubscription(
-
-          '5uE2FAFX7Ezy2xERQhRVIo7P6TpLsna8f3hcSJX9T13qGvxtgGFaJQQJ99CDACYeBjFXJ3w3AAAYACOGn0La',
-
-          'eastus'
-        );
-
-    // voice
-    this.speechConfig
-      .speechSynthesisVoiceName =
-        'en-IN-PrabhatNeural';
-
-    // mp3 output
-    this.speechConfig
-      .speechSynthesisOutputFormat =
-        SpeechSDK
-          .SpeechSynthesisOutputFormat
-          .Audio16Khz128KBitRateMonoMp3;
-
-  }
+  private speechSdkLoad:
+    Promise<typeof SpeechSDKTypes> | null = null;
 
   speak(
     text: string
   ): Promise<ArrayBuffer> {
 
-    return new Promise(
+    return this.ensureSpeechConfig()
+      .then(({ SpeechSDK, speechConfig }) =>
+        new Promise<ArrayBuffer>(
       (resolve, reject) => {
 
-      // Use a fresh synthesizer per request so the next
-      // chunk can be prepared while current audio plays.
       const synthesizer =
         new SpeechSDK
           .SpeechSynthesizer(
 
-            this.speechConfig,
+            speechConfig,
 
             null
           );
@@ -60,40 +49,167 @@ export class TtsService {
 
         text,
 
-        (result) => {
+        (
+          result:
+            SpeechSDKTypes.SpeechSynthesisResult
+        ) => {
+
+          synthesizer.close();
 
           if (
-
             result.reason ===
-
             SpeechSDK.ResultReason
               .SynthesizingAudioCompleted
-
           ) {
-
-            synthesizer.close();
 
             resolve(
               result.audioData
             );
 
-          } else {
-
-            synthesizer.close();
-
-            reject(
-              result.errorDetails
-            );
+            return;
           }
+
+          reject(
+            result.errorDetails
+          );
         },
 
-        (err) => {
+        (err: string) => {
 
           synthesizer.close();
 
           reject(err);
         }
       );
+    }));
+  }
+
+  private async ensureSpeechConfig() {
+
+    const SpeechSDK =
+      await this.waitForSpeechSdk();
+
+    if (!this.speechConfig) {
+
+      this.speechConfig =
+        SpeechSDK.SpeechConfig
+          .fromSubscription(
+
+            '5uE2FAFX7Ezy2xERQhRVIo7P6TpLsna8f3hcSJX9T13qGvxtgGFaJQQJ99CDACYeBjFXJ3w3AAAYACOGn0La',
+
+            'eastus'
+          );
+
+      this.speechConfig
+        .speechSynthesisVoiceName =
+          'en-IN-PrabhatNeural';
+
+      this.speechConfig
+        .speechSynthesisOutputFormat =
+          SpeechSDK
+            .SpeechSynthesisOutputFormat
+            .Audio16Khz128KBitRateMonoMp3;
+    }
+
+    return {
+      SpeechSDK,
+      speechConfig: this.speechConfig
+    };
+  }
+
+  private waitForSpeechSdk() {
+
+    if (getSpeechSdk()?.SpeechConfig) {
+      return Promise.resolve(
+        getSpeechSdk()
+      );
+    }
+
+    if (this.speechSdkLoad) {
+      return this.speechSdkLoad;
+    }
+
+    this.speechSdkLoad =
+      this.loadSpeechSdkScript();
+
+    return this.speechSdkLoad;
+  }
+
+  private loadSpeechSdkScript() {
+
+    return import(
+      'microsoft-cognitiveservices-speech-sdk/distrib/browser/microsoft.cognitiveservices.speech.sdk.bundle'
+    )
+      .then(() => {
+
+        const SpeechSDK =
+          getSpeechSdk();
+
+        if (SpeechSDK?.SpeechConfig) {
+          return SpeechSDK;
+        }
+
+        return this.loadSpeechSdkAsset();
+      })
+      .catch(() =>
+        this.loadSpeechSdkAsset()
+      );
+  }
+
+  private loadSpeechSdkAsset() {
+
+    return new Promise<typeof SpeechSDKTypes>(
+      (resolve, reject) => {
+
+      const existing =
+        document.getElementById(
+          'speech-sdk-script'
+        ) as HTMLScriptElement | null;
+
+      const script =
+        existing ??
+        document.createElement(
+          'script'
+        );
+
+      script.id =
+        'speech-sdk-script';
+
+      script.onload = () => {
+
+        const SpeechSDK =
+          getSpeechSdk();
+
+        if (SpeechSDK?.SpeechConfig) {
+
+          resolve(SpeechSDK);
+
+          return;
+        }
+
+        reject(
+          'Speech SDK script loaded, but window.SpeechSDK is missing.'
+        );
+      };
+
+      script.onerror = () => {
+
+        reject(
+          `Speech SDK failed to load from ${script.src}.`
+        );
+      };
+
+      if (!existing) {
+
+        script.src =
+          new URL(
+            speechSdkAssetPath,
+            document.baseURI
+          ).toString();
+
+        document.head
+          .appendChild(script);
+      }
     });
   }
 }
