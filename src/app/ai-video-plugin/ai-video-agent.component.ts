@@ -6,8 +6,8 @@ import {
   output,
   effect,
   OnChanges,
-  SimpleChanges,
-  AfterViewInit
+  AfterViewInit,
+  SimpleChanges
 } from '@angular/core';
 
 import {
@@ -36,9 +36,16 @@ import {
   ]
 })
 export class AiVideoAgentComponent
-implements
-  OnChanges,
-  AfterViewInit {
+implements OnChanges, AfterViewInit {
+
+  private readonly maxPlaybackMs =
+    10 * 60 * 1000;
+
+  private readonly maxWords =
+    1600;
+
+  private readonly maxChunkWords =
+    45;
 
   text =
     input<string>('');
@@ -59,10 +66,17 @@ implements
     output<string>();
 
   @ViewChild(
-    'videoPlayer',
+    'videoA',
     { static: true }
   )
-  videoPlayer!:
+  videoA!:
+    ElementRef<HTMLVideoElement>;
+
+  @ViewChild(
+    'videoB',
+    { static: true }
+  )
+  videoB!:
     ElementRef<HTMLVideoElement>;
 
   private isRunning =
@@ -70,8 +84,19 @@ implements
 
   private lastText = '';
 
-  // current emotion state
+  private runId = 0;
+
+  // IMPORTANT
+  // active visible player
+  private active:
+    'A' | 'B' = 'A';
+
+  // current emotion video
   private currentVideo = '';
+
+  private keepVideoAlive = false;
+
+  private isPausedByInput = false;
 
   constructor(
 
@@ -88,10 +113,16 @@ implements
 
     effect(() => {
 
-      this.sync.isPaused
-        .set(
-          this.pause()
-        );
+      const paused =
+        this.pause();
+
+      this.sync.setPaused(
+        paused
+      );
+
+      this.setVideoPaused(
+        paused
+      );
 
       this.sync.isStopped
         .set(
@@ -102,21 +133,15 @@ implements
 
   ngAfterViewInit() {
 
-    const video =
-      this.videoPlayer
-        .nativeElement;
+    this.configureLayer(
+      this.videoA.nativeElement,
+      true
+    );
 
-    // IMPORTANT
-    // browser autoplay safety
-    video.muted = true;
-
-    video.defaultMuted = true;
-
-    video.volume = 0;
-
-    video.playsInline = true;
-
-    video.autoplay = true;
+    this.configureLayer(
+      this.videoB.nativeElement,
+      false
+    );
   }
 
   ngOnChanges(
@@ -140,46 +165,63 @@ implements
         this.lastText =
           current;
 
-        this.start(current);
+        void this.start(current);
       }
     }
   }
 
+  // IMPORTANT
+  // seamless dual-layer switching
   switchVideo(
     src?: string,
     stop: boolean = false
   ) {
 
-    const video =
-      this.videoPlayer
-        .nativeElement;
+    const current =
+      this.active === 'A'
+      ? this.videoA.nativeElement
+      : this.videoB.nativeElement;
+
+    const next =
+      this.active === 'A'
+      ? this.videoB.nativeElement
+      : this.videoA.nativeElement;
 
     // STOP
-   if (stop) {
+    if (stop) {
 
-  video.pause();
+      this.keepVideoAlive = false;
 
-  video.loop = false;
+      [current, next]
+        .forEach(v => {
 
-  video.currentTime = 0;
+        this.detachVideoKeepAlive(v);
 
-  // IMPORTANT
-  // fully unload video
-  video.removeAttribute(
-    'src'
-  );
+        this.configureLayer(v, false);
 
-  video.load();
+        v.pause();
 
-  this.currentVideo = '';
+        v.loop = false;
 
-  return;
-}
+        v.currentTime = 0;
+
+        v.removeAttribute(
+          'src'
+        );
+
+        v.load();
+      });
+
+      this.currentVideo = '';
+
+      return;
+    }
 
     if (!src) return;
 
-    // IMPORTANT
-    // same emotion continues
+    this.keepVideoAlive = true;
+
+    // SAME EMOTION CONTINUES
     if (
       this.currentVideo === src
     ) {
@@ -188,46 +230,88 @@ implements
 
     this.currentVideo = src;
 
-    // smooth switch
-    video.pause();
+    let switched = false;
 
-    video.src = src;
+    let switching = false;
 
-    video.load();
+    const playNext =
+      async () => {
 
-    video.loop = true;
+      if (switched || switching) {
+        return;
+      }
 
-    const playVideo = async () => {
+      switching = true;
 
       try {
 
-        await video.play();
+        // IMPORTANT
+        // start NEXT before stopping CURRENT
+        await next.play();
+
+        switched = true;
+
+        this.configureLayer(next, true);
+
+        // IMPORTANT
+        // tiny overlap for seamless feel
+        setTimeout(() => {
+
+          this.detachVideoKeepAlive(current);
+
+          this.configureLayer(current, false);
+
+          current.pause();
+
+          current.currentTime = 0;
+
+        }, 120);
+
+        // swap active layer
+        this.active =
+          this.active === 'A'
+          ? 'B'
+          : 'A';
 
       } catch (err) {
 
+        switching = false;
+
         console.error(
-          'Video play failed:',
+          'Video switch failed:',
           err
         );
       }
     };
 
-    // IMPORTANT
-    // wait till browser loads frame
-    if (
+    next.onloadeddata =
+      playNext;
 
-      video.readyState >= 2
+    next.oncanplay =
+      playNext;
 
-    ) {
+    // preload next layer
+    this.configureLayer(next, false);
 
-      playVideo();
+    next.loop = true;
 
-    } else {
+    next.muted = true;
 
-      video.onloadeddata = () => {
+    next.defaultMuted = true;
 
-        playVideo();
-      };
+    next.volume = 0;
+
+    next.preload = 'auto';
+
+    next.src = src;
+
+    this.attachVideoKeepAlive(next);
+
+    next.load();
+
+    if (next.readyState >= 2) {
+
+      void playNext();
     }
   }
 
@@ -243,12 +327,143 @@ implements
     v.preload = 'auto';
   }
 
+  private attachVideoKeepAlive(
+    video: HTMLVideoElement
+  ) {
+
+    video.onpause = () => {
+
+      if (
+        !this.keepVideoAlive ||
+        this.isPausedByInput
+      ) {
+        return;
+      }
+
+      void video.play();
+    };
+
+    video.onended = () => {
+
+      if (
+        !this.keepVideoAlive ||
+        this.isPausedByInput
+      ) {
+        return;
+      }
+
+      video.currentTime = 0;
+
+      void video.play();
+    };
+
+    video.onstalled = () => {
+
+      if (
+        !this.keepVideoAlive ||
+        this.isPausedByInput
+      ) {
+        return;
+      }
+
+      video.load();
+
+      void video.play();
+    };
+
+    video.onwaiting = () => {
+
+      if (
+        !this.keepVideoAlive ||
+        this.isPausedByInput
+      ) {
+        return;
+      }
+
+      void video.play();
+    };
+  }
+
+  private detachVideoKeepAlive(
+    video: HTMLVideoElement
+  ) {
+
+    video.onpause = null;
+
+    video.onended = null;
+
+    video.onstalled = null;
+
+    video.onwaiting = null;
+  }
+
+  private configureLayer(
+    video: HTMLVideoElement,
+    visible: boolean
+  ) {
+
+    video.style.opacity =
+      visible ? '1' : '0';
+
+    video.style.zIndex =
+      visible ? '2' : '1';
+
+    video.style.pointerEvents =
+      'none';
+
+    video.style.transition =
+      'opacity 80ms linear';
+  }
+
+  private setVideoPaused(
+    paused: boolean
+  ) {
+
+    this.isPausedByInput =
+      paused;
+
+    const current =
+      this.active === 'A'
+      ? this.videoA?.nativeElement
+      : this.videoB?.nativeElement;
+
+    if (!current) {
+      return;
+    }
+
+    if (paused) {
+
+      current.pause();
+
+      return;
+    }
+
+    if (
+      this.keepVideoAlive &&
+      current.src
+    ) {
+
+      void current.play();
+    }
+  }
+
   async start(
     text: string
   ) {
 
+    const currentRun =
+      ++this.runId;
+
     if (this.isRunning) {
-      return;
+
+      this.sync.isStopped
+        .set(true);
+
+      await this.waitUntilIdle();
+
+      if (currentRun !== this.runId) {
+        return;
+      }
     }
 
     this.isRunning = true;
@@ -258,6 +473,9 @@ implements
       text = text
         .replace(/\s+/g, ' ')
         .trim();
+
+      text =
+        this.limitTextToMaxWords(text);
 
       this.sync.isStopped
         .set(true);
@@ -270,14 +488,17 @@ implements
         .set(false);
 
       const sentences =
-        text.match(
-          /[^.!?]+(?:[.!?]+|$)/g
-        )?.map(s => s.trim())
-        || [text];
+        this.toPlayableChunks(text);
 
       const emotions =
         await this.emotion
-          .analyze(text);
+          .analyzeSentences(
+            sentences
+          );
+
+      if (currentRun !== this.runId) {
+        return;
+      }
 
       await this.sync.play(
 
@@ -296,11 +517,94 @@ implements
         (t: string) =>
           this.transcript
             .emit(t)
+        ,
+
+        this.maxPlaybackMs
       );
 
     } finally {
 
       this.isRunning = false;
+    }
+  }
+
+  private toPlayableChunks(
+    text: string
+  ): string[] {
+
+    const sentences =
+      text.match(
+        /[^.!?]+(?:[.!?]+|$)/g
+      )?.map(s => s.trim())
+      || [text];
+
+    return sentences
+      .flatMap(sentence =>
+        this.splitLongSentence(sentence)
+      )
+      .filter(Boolean);
+  }
+
+  private splitLongSentence(
+    sentence: string
+  ): string[] {
+
+    const words =
+      sentence.split(/\s+/)
+        .filter(Boolean);
+
+    if (
+      words.length <=
+      this.maxChunkWords
+    ) {
+      return [sentence];
+    }
+
+    const chunks: string[] = [];
+
+    for (
+      let i = 0;
+      i < words.length;
+      i += this.maxChunkWords
+    ) {
+      chunks.push(
+        words.slice(
+          i,
+          i + this.maxChunkWords
+        ).join(' ')
+      );
+    }
+
+    return chunks;
+  }
+
+  private limitTextToMaxWords(
+    text: string
+  ): string {
+
+    const words =
+      text.split(/\s+/)
+        .filter(Boolean);
+
+    if (
+      words.length <=
+      this.maxWords
+    ) {
+      return text;
+    }
+
+    return words
+      .slice(0, this.maxWords)
+      .join(' ');
+  }
+
+  private async waitUntilIdle() {
+
+    while (this.isRunning) {
+
+      await new Promise(
+        r => setTimeout(r, 50)
+      );
     }
   }
 }

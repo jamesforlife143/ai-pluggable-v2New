@@ -24,6 +24,28 @@ export class SyncEngine {
   // reusable audio player
   private audio = new Audio();
 
+  setPaused(
+    paused: boolean
+  ) {
+
+    this.isPaused.set(paused);
+
+    if (paused) {
+
+      this.audio.pause();
+
+      return;
+    }
+
+    if (
+      this.audio.src &&
+      !this.isStopped()
+    ) {
+
+      void this.audio.play();
+    }
+  }
+
   async play(
 
     sentences: string[],
@@ -42,9 +64,19 @@ export class SyncEngine {
       (src: string) => void,
 
     emitText:
-      (t: string) => void
+      (t: string) => void,
+
+    maxPlaybackMs:
+      number = 10 * 60 * 1000
 
   ) {
+
+    if (!sentences.length) {
+      switchVideo('', true);
+      return;
+    }
+
+    let playbackStartedAt = 0;
 
     // pre-generate first audio
     let nextAudioBuffer =
@@ -52,14 +84,22 @@ export class SyncEngine {
         sentences[0]
       );
 
-    for (
-      let i = 0;
-      i < sentences.length;
-      i++
-    ) {
+    try {
+
+      for (
+        let i = 0;
+        i < sentences.length;
+        i++
+      ) {
 
       // stop playback
-      if (this.isStopped()) {
+      if (
+        this.isStopped() ||
+        this.isPlaybackExpired(
+          playbackStartedAt,
+          maxPlaybackMs
+        )
+      ) {
 
         this.audio.pause();
 
@@ -120,8 +160,9 @@ export class SyncEngine {
         ]
       );
 
-      // generate NEXT audio
-      // while CURRENT plays
+      // Generate NEXT audio while CURRENT plays.
+      // TtsService uses independent synthesizers per call,
+      // so this no longer blocks the current playback path.
       const nextAudioPromise =
 
         i < sentences.length - 1
@@ -208,6 +249,10 @@ export class SyncEngine {
             return;
           }
 
+          if (this.isPaused()) {
+            return;
+          }
+
           emitText(
             words[currentIndex]
             + ' '
@@ -228,23 +273,36 @@ export class SyncEngine {
       await this.sleep(40);
 
       // play audio
+      if (!playbackStartedAt) {
+
+        playbackStartedAt =
+          Date.now();
+      }
+
       await this.audio.play();
 
       // wait completion
-      await new Promise<void>(
-        (res) => {
+      const completed =
+        await this.waitForAudioEnd(
+          audioUrl,
+          playbackStartedAt,
+          maxPlaybackMs
+        );
 
-        this.audio.onended = () => {
+      if (!completed) {
 
-          URL.revokeObjectURL(
-            audioUrl
-          );
+        this.audio.pause();
 
-          res();
-        };
-      });
+        this.audio.currentTime = 0;
 
-      // next audio already ready
+        this.audio.src = '';
+
+        switchVideo('', true);
+
+        break;
+      }
+
+      // next audio should already be ready or nearly ready
       if (nextAudioPromise) {
 
         nextAudioBuffer =
@@ -252,8 +310,95 @@ export class SyncEngine {
       }
     }
 
+    } catch (err) {
+
+      console.error(
+        'Playback failed:',
+        err
+      );
+
+    } finally {
+
+      this.audio.pause();
+
+      this.audio.onplay = null;
+      this.audio.onended = null;
+      this.audio.onerror = null;
+
+      this.audio.currentTime = 0;
+
+      this.audio.src = '';
+
     // stop videos
     switchVideo('', true);
+    }
+  }
+
+  private waitForAudioEnd(
+    audioUrl: string,
+    playbackStartedAt: number,
+    maxPlaybackMs: number
+  ) {
+
+    return new Promise<boolean>(
+      (resolve) => {
+
+      const elapsed =
+        Date.now() - playbackStartedAt;
+
+      const remaining =
+        Math.max(
+          0,
+          maxPlaybackMs - elapsed
+        );
+
+      const timeout =
+        window.setTimeout(() => {
+
+          URL.revokeObjectURL(
+            audioUrl
+          );
+
+          resolve(false);
+
+        }, remaining);
+
+      this.audio.onended = () => {
+
+        window.clearTimeout(
+          timeout
+        );
+
+        URL.revokeObjectURL(
+          audioUrl
+        );
+
+        resolve(true);
+      };
+
+      this.audio.onerror = () => {
+
+        window.clearTimeout(
+          timeout
+        );
+
+        URL.revokeObjectURL(
+          audioUrl
+        );
+
+        resolve(false);
+      };
+    });
+  }
+
+  private isPlaybackExpired(
+    playbackStartedAt: number,
+    maxPlaybackMs: number
+  ) {
+
+    return !!playbackStartedAt &&
+      Date.now() - playbackStartedAt >=
+        maxPlaybackMs;
   }
 
   private sleep(
