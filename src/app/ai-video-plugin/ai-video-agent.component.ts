@@ -208,8 +208,6 @@ implements OnChanges, AfterViewInit {
         v.removeAttribute(
           'src'
         );
-
-        v.load();
       });
 
       this.currentVideo = '';
@@ -335,52 +333,54 @@ implements OnChanges, AfterViewInit {
 
       if (
         !this.keepVideoAlive ||
-        this.isPausedByInput
+        this.isPausedByInput ||
+        !this.hasVideoSource(video)
       ) {
         return;
       }
 
-      void video.play();
+      this.playVideoQuietly(video);
     };
 
     video.onended = () => {
 
       if (
         !this.keepVideoAlive ||
-        this.isPausedByInput
+        this.isPausedByInput ||
+        !this.hasVideoSource(video)
       ) {
         return;
       }
 
       video.currentTime = 0;
 
-      void video.play();
+      this.playVideoQuietly(video);
     };
 
     video.onstalled = () => {
 
       if (
         !this.keepVideoAlive ||
-        this.isPausedByInput
+        this.isPausedByInput ||
+        !this.hasVideoSource(video)
       ) {
         return;
       }
 
-      video.load();
-
-      void video.play();
+      this.playVideoQuietly(video);
     };
 
     video.onwaiting = () => {
 
       if (
         !this.keepVideoAlive ||
-        this.isPausedByInput
+        this.isPausedByInput ||
+        !this.hasVideoSource(video)
       ) {
         return;
       }
 
-      void video.play();
+      this.playVideoQuietly(video);
     };
   }
 
@@ -440,11 +440,32 @@ implements OnChanges, AfterViewInit {
 
     if (
       this.keepVideoAlive &&
-      current.src
+      this.hasVideoSource(current)
     ) {
 
-      void current.play();
+      this.playVideoQuietly(current);
     }
+  }
+
+  private hasVideoSource(
+    video: HTMLVideoElement
+  ) {
+
+    return !!(
+      video.currentSrc ||
+      video.getAttribute('src')
+    );
+  }
+
+  private playVideoQuietly(
+    video: HTMLVideoElement
+  ) {
+
+    video.play()
+      .catch(() => {
+        // Ignored: cleanup, tab state, or autoplay policy
+        // can reject a redundant video play request.
+      });
   }
 
   async start(

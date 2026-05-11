@@ -27,6 +27,11 @@
             "assets": [
                "src/assets",
               {
+                "glob": "microsoft.cognitiveservices.speech.sdk.bundle.js",
+                "input": "node_modules/microsoft-cognitiveservices-speech-sdk/distrib/browser",
+                "output": "assets/speech-sdk"
+              },
+              {
                 "glob": "**/*",
                 "input": "public"
               }
