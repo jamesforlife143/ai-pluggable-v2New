@@ -11,10 +11,6 @@ export class TtsService {
   private speechConfig:
     SpeechSDK.SpeechConfig;
 
-  // SINGLE reusable synthesizer
-  private synthesizer:
-    SpeechSDK.SpeechSynthesizer;
-
   constructor() {
 
     // Azure config
@@ -39,19 +35,6 @@ export class TtsService {
           .SpeechSynthesisOutputFormat
           .Audio16Khz128KBitRateMonoMp3;
 
-    // IMPORTANT
-    // disables direct speaker playback
-    const audioConfig = null;
-
-    // SINGLE synthesizer instance
-    this.synthesizer =
-      new SpeechSDK
-        .SpeechSynthesizer(
-
-          this.speechConfig,
-
-          audioConfig
-        );
   }
 
   speak(
@@ -61,7 +44,18 @@ export class TtsService {
     return new Promise(
       (resolve, reject) => {
 
-      this.synthesizer
+      // Use a fresh synthesizer per request so the next
+      // chunk can be prepared while current audio plays.
+      const synthesizer =
+        new SpeechSDK
+          .SpeechSynthesizer(
+
+            this.speechConfig,
+
+            null
+          );
+
+      synthesizer
         .speakTextAsync(
 
         text,
@@ -77,11 +71,15 @@ export class TtsService {
 
           ) {
 
+            synthesizer.close();
+
             resolve(
               result.audioData
             );
 
           } else {
+
+            synthesizer.close();
 
             reject(
               result.errorDetails
@@ -90,6 +88,8 @@ export class TtsService {
         },
 
         (err) => {
+
+          synthesizer.close();
 
           reject(err);
         }

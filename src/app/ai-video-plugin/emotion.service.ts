@@ -19,11 +19,49 @@ export class EmotionService {
   private apiVersion = '';
   private apiKey = '';
 
+  private readonly batchSize = 20;
+
   async analyze(text: string): Promise<EmotionType[]> {
     text = text.replace(/\s+/g, ' ').trim();
 
     const sentences =
       text.match(/[^.!?]+(?:[.!?]+|$)/g)?.map(s => s.trim()) || [text];
+
+    return this.analyzeSentences(sentences);
+  }
+
+  async analyzeSentences(
+    sentences: string[]
+  ): Promise<EmotionType[]> {
+
+    const emotions: EmotionType[] = [];
+
+    for (
+      let i = 0;
+      i < sentences.length;
+      i += this.batchSize
+    ) {
+
+      const batch =
+        sentences.slice(
+          i,
+          i + this.batchSize
+        );
+
+      const batchEmotions =
+        await this.analyzeBatch(batch);
+
+      emotions.push(
+        ...batchEmotions
+      );
+    }
+
+    return emotions;
+  }
+
+  private async analyzeBatch(
+    sentences: string[]
+  ): Promise<EmotionType[]> {
 
     try {
       // OpenAI-compatible chat completions URL for Ollama
@@ -40,7 +78,11 @@ export class EmotionService {
           model: this.model,
           temperature: 0,
           top_p: 0,
-          max_tokens: 100,
+          max_tokens:
+            Math.max(
+              120,
+              sentences.length * 8
+            ),
           messages: [
             {
               role: 'system',
@@ -111,7 +153,11 @@ sentence count exactly.
             },
             {
               role: 'user',
-              content: sentences.join('\n')
+              content: sentences
+                .map((sentence, index) =>
+                  `${index + 1}. ${sentence}`
+                )
+                .join('\n')
             }
           ]
         })
