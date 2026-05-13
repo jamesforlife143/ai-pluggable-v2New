@@ -1,0 +1,643 @@
+import {
+  Component,
+  ElementRef,
+  ViewChild,
+  input,
+  output,
+  effect,
+  OnChanges,
+  AfterViewInit,
+  SimpleChanges
+} from '@angular/core';
+
+import {
+  EmotionService
+} from './emotion.service';
+
+import {
+  TtsService
+} from './tts.service';
+
+import {
+  SyncEngine
+} from './sync-engine.service';
+
+@Component({
+
+  selector: 'ai-video-agent',
+
+  standalone: true,
+
+  templateUrl:
+    './ai-video-agent.component.html',
+
+  styleUrls: [
+    './ai-video-agent.component.scss'
+  ]
+})
+export class AiVideoAgentComponent
+implements OnChanges, AfterViewInit {
+
+  private readonly maxPlaybackMs =
+    10 * 60 * 1000;
+
+  private readonly maxWords =
+    1600;
+
+  private readonly maxChunkWords =
+    45;
+
+  text =
+    input<string>('');
+
+  pause =
+    input<boolean>(false);
+
+  stop =
+    input<boolean>(false);
+
+  width =
+    input<string>('100%');
+
+  height =
+    input<string>('300px');
+
+  transcript =
+    output<string>();
+
+  @ViewChild(
+    'videoA',
+    { static: true }
+  )
+  videoA!:
+    ElementRef<HTMLVideoElement>;
+
+  @ViewChild(
+    'videoB',
+    { static: true }
+  )
+  videoB!:
+    ElementRef<HTMLVideoElement>;
+
+  private isRunning =
+    false;
+
+  private lastText = '';
+
+  private runId = 0;
+
+  // IMPORTANT
+  // active visible player
+  private active:
+    'A' | 'B' = 'A';
+
+  // current emotion video
+  private currentVideo = '';
+
+  private keepVideoAlive = false;
+
+  private isPausedByInput = false;
+
+  constructor(
+
+    private emotion:
+      EmotionService,
+
+    private tts:
+      TtsService,
+
+    private sync:
+      SyncEngine
+
+  ) {
+
+    effect(() => {
+
+      const paused =
+        this.pause();
+
+      this.sync.setPaused(
+        paused
+      );
+
+      this.setVideoPaused(
+        paused
+      );
+
+      if (this.stop()) {
+
+        this.sync.stopNow();
+
+        this.switchVideo(
+          '',
+          true
+        );
+
+        this.isRunning = false;
+
+      } else {
+
+        this.sync.isStopped
+          .set(false);
+      }
+    });
+  }
+
+  ngAfterViewInit() {
+
+    this.configureLayer(
+      this.videoA.nativeElement,
+      true
+    );
+
+    this.configureLayer(
+      this.videoB.nativeElement,
+      false
+    );
+  }
+
+  ngOnChanges(
+    changes: SimpleChanges
+  ) {
+
+    if (
+      changes['text'] &&
+      this.text()
+    ) {
+
+      const current =
+        this.text()
+          .trim();
+
+      if (
+        current &&
+        current !== this.lastText
+      ) {
+
+        this.lastText =
+          current;
+
+        void this.start(current);
+      }
+    }
+  }
+
+  // IMPORTANT
+  // seamless dual-layer switching
+  switchVideo(
+    src?: string,
+    stop: boolean = false
+  ) {
+
+    const current =
+      this.active === 'A'
+      ? this.videoA.nativeElement
+      : this.videoB.nativeElement;
+
+    const next =
+      this.active === 'A'
+      ? this.videoB.nativeElement
+      : this.videoA.nativeElement;
+
+    // STOP
+    if (stop) {
+
+      this.keepVideoAlive = false;
+
+      [current, next]
+        .forEach(v => {
+
+        this.detachVideoKeepAlive(v);
+
+        this.configureLayer(v, false);
+
+        v.pause();
+
+        v.loop = false;
+
+        v.currentTime = 0;
+
+        v.removeAttribute(
+          'src'
+        );
+      });
+
+      this.currentVideo = '';
+
+      return;
+    }
+
+    if (!src) return;
+
+    this.keepVideoAlive = true;
+
+    // SAME EMOTION CONTINUES
+    if (
+      this.currentVideo === src
+    ) {
+      return;
+    }
+
+    this.currentVideo = src;
+
+    let switched = false;
+
+    let switching = false;
+
+    const playNext =
+      async () => {
+
+      if (switched || switching) {
+        return;
+      }
+
+      switching = true;
+
+      try {
+
+        // IMPORTANT
+        // start NEXT before stopping CURRENT
+        await next.play();
+
+        switched = true;
+
+        this.configureLayer(next, true);
+
+        // IMPORTANT
+        // tiny overlap for seamless feel
+        setTimeout(() => {
+
+          this.detachVideoKeepAlive(current);
+
+          this.configureLayer(current, false);
+
+          current.pause();
+
+          current.currentTime = 0;
+
+        }, 120);
+
+        // swap active layer
+        this.active =
+          this.active === 'A'
+          ? 'B'
+          : 'A';
+
+      } catch (err) {
+
+        switching = false;
+
+        console.error(
+          'Video switch failed:',
+          err
+        );
+      }
+    };
+
+    next.onloadeddata =
+      playNext;
+
+    next.oncanplay =
+      playNext;
+
+    // preload next layer
+    this.configureLayer(next, false);
+
+    next.loop = true;
+
+    next.muted = true;
+
+    next.defaultMuted = true;
+
+    next.volume = 0;
+
+    next.preload = 'auto';
+
+    next.src = src;
+
+    this.attachVideoKeepAlive(next);
+
+    next.load();
+
+    if (next.readyState >= 2) {
+
+      void playNext();
+    }
+  }
+
+  preload(src: string) {
+
+    const v =
+      document.createElement(
+        'video'
+      );
+
+    v.src = src;
+
+    v.preload = 'auto';
+  }
+
+  private attachVideoKeepAlive(
+    video: HTMLVideoElement
+  ) {
+
+    video.onpause = () => {
+
+      if (
+        !this.keepVideoAlive ||
+        this.isPausedByInput ||
+        !this.hasVideoSource(video)
+      ) {
+        return;
+      }
+
+      this.playVideoQuietly(video);
+    };
+
+    video.onended = () => {
+
+      if (
+        !this.keepVideoAlive ||
+        this.isPausedByInput ||
+        !this.hasVideoSource(video)
+      ) {
+        return;
+      }
+
+      video.currentTime = 0;
+
+      this.playVideoQuietly(video);
+    };
+
+    video.onstalled = () => {
+
+      if (
+        !this.keepVideoAlive ||
+        this.isPausedByInput ||
+        !this.hasVideoSource(video)
+      ) {
+        return;
+      }
+
+      this.playVideoQuietly(video);
+    };
+
+    video.onwaiting = () => {
+
+      if (
+        !this.keepVideoAlive ||
+        this.isPausedByInput ||
+        !this.hasVideoSource(video)
+      ) {
+        return;
+      }
+
+      this.playVideoQuietly(video);
+    };
+  }
+
+  private detachVideoKeepAlive(
+    video: HTMLVideoElement
+  ) {
+
+    video.onpause = null;
+
+    video.onended = null;
+
+    video.onstalled = null;
+
+    video.onwaiting = null;
+  }
+
+  private configureLayer(
+    video: HTMLVideoElement,
+    visible: boolean
+  ) {
+
+    video.style.opacity =
+      visible ? '1' : '0';
+
+    video.style.zIndex =
+      visible ? '2' : '1';
+
+    video.style.pointerEvents =
+      'none';
+
+    video.style.transition =
+      'opacity 80ms linear';
+  }
+
+  private setVideoPaused(
+    paused: boolean
+  ) {
+
+    this.isPausedByInput =
+      paused;
+
+    const current =
+      this.active === 'A'
+      ? this.videoA?.nativeElement
+      : this.videoB?.nativeElement;
+
+    if (!current) {
+      return;
+    }
+
+    if (paused) {
+
+      current.pause();
+
+      return;
+    }
+
+    if (
+      this.keepVideoAlive &&
+      this.hasVideoSource(current)
+    ) {
+
+      this.playVideoQuietly(current);
+    }
+  }
+
+  private hasVideoSource(
+    video: HTMLVideoElement
+  ) {
+
+    return !!(
+      video.currentSrc ||
+      video.getAttribute('src')
+    );
+  }
+
+  private playVideoQuietly(
+    video: HTMLVideoElement
+  ) {
+
+    video.play()
+      .catch(() => {
+        // Ignored: cleanup, tab state, or autoplay policy
+        // can reject a redundant video play request.
+      });
+  }
+
+  async start(
+    text: string
+  ) {
+
+    const currentRun =
+      ++this.runId;
+
+    if (this.isRunning) {
+
+      this.sync.isStopped
+        .set(true);
+
+      await this.waitUntilIdle();
+
+      if (currentRun !== this.runId) {
+        return;
+      }
+    }
+
+    this.isRunning = true;
+
+    try {
+
+      text = text
+        .replace(/\s+/g, ' ')
+        .trim();
+
+      text =
+        this.limitTextToMaxWords(text);
+
+      this.sync.isStopped
+        .set(true);
+
+      await new Promise(
+        r => setTimeout(r, 50)
+      );
+
+      this.sync.isStopped
+        .set(false);
+
+      const sentences =
+        this.toPlayableChunks(text);
+
+      const emotions =
+        await this.emotion
+          .analyzeSentences(
+            sentences
+          );
+
+      if (currentRun !== this.runId) {
+        return;
+      }
+
+      await this.sync.play(
+
+        sentences,
+
+        emotions,
+
+        this.tts,
+
+        this.switchVideo
+          .bind(this),
+
+        this.preload
+          .bind(this),
+
+        (t: string) =>
+          this.transcript
+            .emit(t)
+        ,
+
+        this.maxPlaybackMs
+      );
+
+    } finally {
+
+      this.isRunning = false;
+    }
+  }
+
+  private toPlayableChunks(
+    text: string
+  ): string[] {
+
+    const sentences =
+      text.match(
+        /[^.!?]+(?:[.!?]+|$)/g
+      )?.map(s => s.trim())
+      || [text];
+
+    return sentences
+      .flatMap(sentence =>
+        this.splitLongSentence(sentence)
+      )
+      .filter(Boolean);
+  }
+
+  private splitLongSentence(
+    sentence: string
+  ): string[] {
+
+    const words =
+      sentence.split(/\s+/)
+        .filter(Boolean);
+
+    if (
+      words.length <=
+      this.maxChunkWords
+    ) {
+      return [sentence];
+    }
+
+    const chunks: string[] = [];
+
+    for (
+      let i = 0;
+      i < words.length;
+      i += this.maxChunkWords
+    ) {
+      chunks.push(
+        words.slice(
+          i,
+          i + this.maxChunkWords
+        ).join(' ')
+      );
+    }
+
+    return chunks;
+  }
+
+  private limitTextToMaxWords(
+    text: string
+  ): string {
+
+    const words =
+      text.split(/\s+/)
+        .filter(Boolean);
+
+    if (
+      words.length <=
+      this.maxWords
+    ) {
+      return text;
+    }
+
+    return words
+      .slice(0, this.maxWords)
+      .join(' ');
+  }
+
+  private async waitUntilIdle() {
+
+    while (this.isRunning) {
+
+      await new Promise(
+        r => setTimeout(r, 50)
+      );
+    }
+  }
+}

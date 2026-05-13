@@ -1,0 +1,120 @@
+import { Injectable } from '@angular/core';
+
+import type * as SpeechSDKTypes
+from 'microsoft-cognitiveservices-speech-sdk';
+
+declare global {
+  interface Window {
+    SpeechSDK: typeof SpeechSDKTypes;
+  }
+}
+
+const getSpeechSdk = () =>
+  window.SpeechSDK;
+
+@Injectable({
+  providedIn: 'root'
+})
+export class TtsService {
+
+  private speechConfig:
+    SpeechSDKTypes.SpeechConfig | null = null;
+
+  speak(
+    text: string
+  ): Promise<ArrayBuffer> {
+
+    return this.ensureSpeechConfig()
+      .then(({ SpeechSDK, speechConfig }) =>
+        new Promise<ArrayBuffer>(
+      (resolve, reject) => {
+
+      const synthesizer =
+        new SpeechSDK
+          .SpeechSynthesizer(
+
+            speechConfig,
+
+            null
+          );
+
+      synthesizer
+        .speakTextAsync(
+
+        text,
+
+        (
+          result:
+            SpeechSDKTypes.SpeechSynthesisResult
+        ) => {
+
+          synthesizer.close();
+
+          if (
+            result.reason ===
+            SpeechSDK.ResultReason
+              .SynthesizingAudioCompleted
+          ) {
+
+            resolve(
+              result.audioData
+            );
+
+            return;
+          }
+
+          reject(
+            result.errorDetails
+          );
+        },
+
+        (err: string) => {
+
+          synthesizer.close();
+
+          reject(err);
+        }
+      );
+    }));
+  }
+
+  private async ensureSpeechConfig() {
+
+    const SpeechSDK =
+      await this.waitForSpeechSdk();
+
+    if (!this.speechConfig) {
+
+      this.speechConfig =
+        SpeechSDK.SpeechConfig
+          .fromSubscription(
+
+            '5uE2FAFX7Ezy2xERQhRVIo7P6TpLsna8f3hcSJX9T13qGvxtgGFaJQQJ99CDACYeBjFXJ3w3AAAYACOGn0La',
+
+            'eastus'
+          );
+
+      this.speechConfig
+        .speechSynthesisVoiceName =
+          'en-IN-PrabhatNeural';
+
+      this.speechConfig
+        .speechSynthesisOutputFormat =
+          SpeechSDK
+            .SpeechSynthesisOutputFormat
+            .Audio16Khz128KBitRateMonoMp3;
+    }
+
+    return {
+      SpeechSDK,
+      speechConfig: this.speechConfig
+    };
+  }
+
+  private waitForSpeechSdk() {
+
+    return Promise.resolve(
+      getSpeechSdk()
+    );
+  }
+}
